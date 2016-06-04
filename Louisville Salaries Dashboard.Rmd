@@ -1,0 +1,240 @@
+---
+title: "Louisville Metro Government Salary Explorer"
+output: 
+  flexdashboard::flex_dashboard:
+    theme: yeti
+    social: menu
+    source: embed
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+# Load Packages
+library(flexdashboard)
+library(dplyr)
+library(ggvis)
+library(shiny)
+library(ggplot2)
+library(plotly)
+library(knitr)
+library(scales)
+
+# GGplot Theme
+theme_set(theme_gray(base_size=13))
+
+# Pull Data
+df <- read.delim(url("http://api.louisvilleky.gov/api/File/DownloadFile?fileName=SalaryData.txt"),stringsAsFactors = F)
+df$CalendarYear <- factor(df$CalendarYear)
+df$JobTitle <- factor(trimws(df$JobTitle))
+df$Department <- factor(trimws(df$Department))
+df$EmployeeName <- factor(df$EmployeeName)
+
+
+```
+
+
+Inputs {.sidebar}
+=========================================
+This application pulls the latest salary data from the <a href="http://portal.louisvilleky.gov/service/data">Louisville Open Data Portal</a>, which provides data from 2008 to present.
+
+Plots are interactive, hover for information. Further options are available in the top right of each plot window.
+
+```{r}
+selectizeInput("Departments","Tab 2: Select Departments to Overlay",levels(df$Department),selected=NULL,multiple=TRUE)
+selectInput("Department","Tab 3: Pick Single Department",levels(df$Department))
+selectInput("Jobtitle","Tab 4: Select a job title",choices=levels(df$JobTitle),selected="Cashier")
+selectizeInput("Employee","Tab 5: Pick Employee",levels(df$EmployeeName), selected="Adams, William",options = list(maxOptions=20000))
+
+```
+
+1) Total Salaries/Employees
+=========================================
+
+Column
+---------------------------------------
+### The sum of all annual salaries by year
+
+```{r}
+totals <- df %>%
+  group_by(CalendarYear) %>%
+  summarise("Total" = sum(AnnualRate))
+
+renderPlotly({
+  ggplot(totals, aes(x=CalendarYear,y=Total,group=1))+
+    geom_point(col="blue")+
+    geom_line(col="blue") +
+    labs(x=NULL,y=NULL,title=NULL)+
+    scale_y_continuous(labels = comma)
+
+})
+```
+
+### Number of employees by year
+
+```{r}
+emps <- df %>%
+  group_by(CalendarYear) %>%
+  summarise("Total Employees" = n())
+
+renderPlotly({
+  ggplot(emps, aes(x=CalendarYear, y=`Total Employees`, group=1))+
+    geom_point(col="blue")+
+    geom_line(col="blue")+
+    labs(x=NULL,y=NULL,title=NULL)
+})
+```
+
+Column
+--------------------------
+
+### Employees by Department (2016)
+
+```{r}
+bydept <- df %>%
+  group_by(CalendarYear,Department) %>%
+  summarise(Employees = n()) %>%
+  filter(CalendarYear == 2016)
+
+bydept$Department <- reorder(bydept$Department,bydept$Employees)
+
+renderPlotly({
+  ggplot(bydept, aes(x=Department,y=Employees))+
+           geom_bar(stat="identity", fill="blue")+
+           coord_flip()+
+           labs(x=NULL,y=NULL,title=NULL)
+})
+
+```
+
+
+2) Across Depts
+=========================================
+### Select departments to overlay from the sidebar (type to search) for a comparison of salary distributions.
+
+
+```{r}
+dens <- reactive({
+  df <- df[df$Department %in% input$Departments,]
+})
+
+renderPlotly({
+  if(is.null(input$Departments)){
+    return(NULL)
+  }
+  ggplot(dens(), aes(x=AnnualRate, fill=Department))+
+  geom_density(alpha=.6)+
+  scale_x_continuous(labels = comma)+
+  labs(x="Yearly Salary",y="Density",title=NULL)
+
+})
+```
+
+3) Within Depts
+=========================================
+### Select a department from the sidebar to see the top ten salaries from that department for all available years. 
+
+```{r}
+highest <- reactive({
+  df %>%
+  filter(Department == input$Department) %>%
+  group_by(CalendarYear) %>%
+  arrange(desc(AnnualRate)) %>% 
+  top_n(10)
+})
+  
+renderPlotly({
+  ggplot(highest(), aes(x=EmployeeName,y=AnnualRate))+
+    geom_bar(stat="identity",fill="blue") +
+    facet_wrap(~CalendarYear,scales="free_x") +
+    scale_y_continuous(labels = comma)+
+    labs(y="Salary",x="Employee")+
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))
+
+})  
+  
+
+
+
+```
+
+4) Job Titles
+=========================================
+### Select any job title from the sidebar to see the salary distribution (all years) by department.
+
+```{r}
+titles <- reactive({
+  df %>%
+    filter(JobTitle == input$Jobtitle)
+})
+
+renderPlotly({
+  ggplot(titles(), aes(x=AnnualRate, fill=Department))+
+    geom_histogram(col="white",position="identity",alpha=.6)+
+    scale_x_continuous(labels = comma)+
+    labs(x="Yearly Salary",y="Count",title=paste(input$Jobtitle,"Income by Department",sep=" "))
+})
+```
+
+
+5) By Employee {data-orientation=columns}
+=====================================     
+
+Column
+-------------------------
+### Select any employee from the sidebar (type to search).
+
+
+```{r}
+employee <- reactive({
+    df2 <- df %>%
+    filter(EmployeeName == input$Employee) %>%
+    arrange(desc(CalendarYear))
+
+})
+
+renderPlotly({
+  ggplot(employee(),aes(x=CalendarYear,y=AnnualRate,group=1))+
+    geom_point(col="blue")+
+    geom_line(col="blue")+
+    labs(x=NULL,y="Yearly Salary",title=paste(input$Employee,"Salary Trend"))+
+    scale_y_continuous(labels = comma)
+})    
+```
+
+```{r}
+dep <- renderText({
+  as.character(employee()[1,3])
+})
+
+jobt <- renderText({
+  as.character(employee()[1,4])
+})
+
+wages <- renderText({
+  paste("$",as.character(format(employee()[1,10],big.mark=",")),sep="")
+})
+
+minsal <- renderText({
+  paste("$",as.character(format(min(employee()[,5]),big.mark=",")),sep="")
+})
+
+maxsal <- renderText({
+  paste("$",as.character(format(max(employee()[,5]),big.mark=",")),sep="")
+})
+
+overtime <- renderText({
+  paste("$",as.character(format(sum(employee()[,7]),big.mark=",")),sep="")
+})
+
+```
+
+Column {data-width=200}
+--------------------------
+### Employee Information
+
+This employee is in the <b>`r dep`</b> department. Their job title is <b>`r jobt`</b>. So far in 2016, this employee has received <l style="color:green">`r wages`</l> in compensation. 
+
+Their lowest salary in the available data is <l style="color:green">`r minsal`</l> and their highest salary in the available data is <l style="color:green">`r maxsal`</l>.
+
+This employee has received <l style="color:green">`r overtime`</l> in overtime pay since 2008.
+
